@@ -1,0 +1,6 @@
+{
+  // "rust-analyzer.cargo.target": "avr-unknown-unknown",
+  "rust-analyzer.check.allTargets": false,
+  "search.quickOpen.includeSymbols": false,
+  "editor.formatOnSave": true
+}
