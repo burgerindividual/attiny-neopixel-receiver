@@ -3,6 +3,7 @@ use core::mem::transmute;
 use avr_device::attiny85::*;
 
 pub mod eeprom;
+pub mod led;
 pub mod pins;
 pub mod spi;
 

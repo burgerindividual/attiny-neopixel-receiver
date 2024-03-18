@@ -6,6 +6,7 @@
 #![allow(unused)]
 
 mod intrinsics;
+mod packet;
 mod peripherals;
 
 use core::arch::asm;
@@ -23,6 +24,7 @@ use embedded_hal::spi::SpiBus;
 use embedded_nrf24l01::{
     Configuration, CrcMode, DataRate, Device, Payload, StandbyMode, NRF24L01, PIPES_COUNT,
 };
+use peripherals::led::{hue_cycle, write_led, LEDColor};
 use peripherals::pins::{CSNPin, NoopPin, PB4};
 use peripherals::spi::Spi;
 
@@ -45,6 +47,8 @@ use crate::peripherals::*;
 // 210, 213, 215, 218, 220,     223, 225, 228, 231, 233, 236, 239, 241, 244,
 // 247, 249, 252, 255, ];
 
+pub const LED_STRIP_LENGTH: u16 = 375;
+
 #[panic_handler]
 fn panic_handler(_: &PanicInfo) -> ! {
     eeprom::write(
@@ -61,6 +65,12 @@ fn panic_handler(_: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn main() {
+    // clear panic byte
+    eeprom::write(
+        511, // last byte in attiny85 eeprom
+        0xFF,
+    );
+
     let portb = peripherals::portb();
     portb.ddrb.write(|w| {
         w
@@ -77,7 +87,7 @@ pub extern "C" fn main() {
     });
 
     // enable internal pullup resistor for miso
-    portb.portb.write(|w| w.pb1().set_bit());
+    portb.portb.write(|w| w.pb1().set_bit().pb3().set_bit());
 
     // let tc0 = peripherals::tc0();
     // tc0.tccr0a.modify(|_r, w| w.wgm0().ctc());
@@ -112,113 +122,46 @@ pub extern "C" fn main() {
     nrf.set_interrupt_mask(false, true, true).unwrap();
     nrf.clear_interrupts().unwrap();
 
-    let mut led_toggle = false;
-
-    loop {
-        let data = receive_packet(&mut nrf).unwrap();
-        let decoded = core::str::from_utf8(&data).unwrap();
-
-        if decoded == "Ping!" {
-            led_toggle = !led_toggle;
-        } else {
-            panic!();
-        }
-
-        for _ in 0..1 {
-            write_led::<4>(
-                &portb,
-                if led_toggle {
-                    [0x40, 0x20, 0x80]
-                } else {
-                    [0x00, 0x00, 0x00]
-                },
-            );
-        }
-
-        // chilling for 300μs resets the line
-        delay_cycles(4800);
-    }
-}
-
-pub fn write_led<const PIN: u8>(portb: &PORTB, grb: [u8; 3]) {
-    for color in grb {
-        for bit in (0..u8::BITS).rev() {
-            let cur_bit_set = (color & (0b1 << bit)) != 0;
-
-            if cur_bit_set {
-                unsafe {
-                    asm!(
-                        "sbi 24, {pin}",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "cbi 24, {pin}",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        pin = const { PIN }
-                    );
-                }
-            } else {
-                unsafe {
-                    asm!(
-                        "sbi 24, {pin}",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "cbi 24, {pin}",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        "nop",
-                        pin = const { PIN }
-                    );
-                }
-            }
-        }
-    }
-}
-
-fn receive_packet<D: Device>(nrf: &mut StandbyMode<D>) -> Option<Payload> {
-    // Safety is held here because we replace the nrf device at the end of the
-    // function
-    let mut nrf_rx = unsafe { ptr::read_unaligned(nrf) }.rx().ok()?;
-
-    // 130us transition to standby mode, 2080 cycles at 16mhz
+    let mut nrf_rx = nrf.rx().unwrap();
+    // 130us transition from standby mode, 2080 cycles at 16mhz
     delay_cycles(2080);
 
-    // wait for RX ready interrupt
-    while !nrf_rx.get_interrupts().ok()?.0 {}
+    let mut led_toggle = false;
+    let mut start_color = LEDColor::from_rgb(0xFF, 0x00, 0x00);
 
-    let payload = nrf_rx.read().ok()?;
+    loop {
+        // process if RX ready interrupt is set
+        if nrf_rx.get_interrupts().unwrap().0 {
+            let payload = nrf_rx.read().unwrap();
+            nrf_rx.clear_interrupts().unwrap();
 
-    unsafe {
-        ptr::write_unaligned(nrf, nrf_rx.standby());
+            let decoded = core::str::from_utf8(&payload).unwrap();
+
+            if decoded == "Ping!" {
+                led_toggle = !led_toggle;
+            } else {
+                panic!();
+            }
+        }
+
+        if led_toggle {
+            let mut current_color = start_color;
+            for _ in 0..LED_STRIP_LENGTH {
+                write_led::<4>(&portb, current_color);
+                hue_cycle(&mut current_color, 1);
+            }
+        } else {
+            for _ in 0..LED_STRIP_LENGTH {
+                write_led::<4>(&portb, LEDColor::BLACK);
+            }
+        }
+
+        hue_cycle(&mut start_color, 1);
+
+        // waiting for atleast 250μs ends the led line commands. we'll wait for 300μs
+        delay_cycles(4800);
+        // delay for 2ms, this is the maximum refresh speed of the led strip
+        // (this can be shorter)
+        // delay_cycles(16000 * 2);
     }
-    nrf.clear_interrupts().ok()?;
-
-    Some(payload)
 }

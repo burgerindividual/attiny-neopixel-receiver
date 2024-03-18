@@ -3,8 +3,6 @@ name = "attiny-neopixel"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 # attiny-hal = { git = "https://github.com/Rahix/avr-hal.git", features = [
 #     "attiny85",
@@ -16,7 +14,7 @@ nb = "1.1"
 embedded-nrf24l01 = { git = "https://github.com/burgerindividual/embedded-nrf24l01" }
 
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
@@ -24,7 +22,7 @@ debug = false
 strip = "debuginfo"
 
 [profile.dev]
-opt-level = 3
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 panic = "abort"
